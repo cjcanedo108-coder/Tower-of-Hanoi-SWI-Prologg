@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tower of Hanoi</title>
+<style>
+  :root {
+    --bg: #fdf1f4;
+    --ink: #4a2433;
+    --muted: #8a6573;
+    --accent: #b9768c;
+    --on-accent: #fff;
+    --base: #e9c3cf;
+    --focus: #2f7fb8;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #241820;
+      --ink: #f6e3ea;
+      --muted: #c4a2b0;
+      --accent: #d58aa4;
+      --on-accent: #2a1620;
+      --base: #4a3340;
+      --focus: #7cc0f0;
+      color-scheme: dark;
+    }
+  }
+ 
+  * { box-sizing: border-box; }
+ 
+  body {
+    margin: 0;
+    padding: 48px 20px 56px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 36px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+  }
+ 
+  header { text-align: center; }
+  h1 { margin: 0 0 14px; font-size: 2rem; }
+  header p { margin: 0; max-width: 46ch; color: var(--muted); line-height: 1.7; }
+ 
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: center; }
+  .controls label { color: var(--muted); }
+ 
+  button, select {
+    font: inherit;
+    padding: 10px 22px;
+    border-radius: 8px;
+    border: 2px solid var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+    cursor: pointer;
+  }
+  button.ghost, select { background: transparent; color: var(--ink); }
+  button:disabled { opacity: .5; cursor: default; }
+  :is(button, select):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+ 
+  .status { text-align: center; }
+  .status .count { font-size: 1.15rem; }
+  .status .msg { min-height: 1.5em; margin-top: 12px; color: var(--muted); }
+ 
+  .board { display: flex; gap: 28px; width: 100%; max-width: 800px; }
+ 
+  .peg {
+    flex: 1;
+    height: 340px;
+    position: relative;
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: center;
+    padding-bottom: 12px;
+    padding-inline: 6px;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    background: none;
+    color: inherit;
+  }
+  .peg::before {              /* the pole */
+    content: "";
+    position: absolute;
+    top: 16px; bottom: 12px; left: 50%;
+    width: 8px; margin-left: -4px;
+    border-radius: 4px;
+    background: var(--accent);
+  }
+  .peg::after {               /* the base */
+    content: "";
+    position: absolute;
+    bottom: 0; left: 4%; right: 4%;
+    height: 12px;
+    border-radius: 6px;
+    background: var(--base);
+  }
+  .peg.selected { border-color: var(--focus); }
+ 
+  .disk {
+    position: relative;
+    z-index: 1;
+    height: 28px;
+    margin-top: 8px;
+    border-radius: 14px;
+    transition: transform .15s;
+  }
+  .disk.lifted { transform: translateY(-16px); }
+ 
+  details { width: 100%; max-width: 800px; color: var(--muted); }
+  summary { cursor: pointer; }
+  ol { max-height: 180px; overflow: auto; margin: 14px 0 0; padding-left: 1.4em; line-height: 1.9; }
+</style>
+</head>
+<body>
+ 
+<header>
+  <h1>Tower of Hanoi</h1>
+  <p>Move the stack to the right peg, one disk at a time. A bigger disk can't sit on a smaller one. Auto-solve is powered by Prolog.</p>
+</header>
+ 
+<div class="controls">
+  <label>Disks <select id="disks"></select></label>
+  <button id="solve">Auto-solve</button>
+  <button id="reset" class="ghost">Reset</button>
+</div>
+ 
+<div class="status" role="status">
+  <div class="count">Moves: <b id="count">0</b> of <b id="best">7</b> minimum</div>
+  <div class="msg" id="msg"></div>
+</div>
+ 
+<div class="board" id="board"></div>
+ 
+<details>
+  <summary>Move list</summary>
+  <ol id="moves"></ol>
+</details>
+ 
+<script>
+  const PEG_NAMES = ["Left", "Middle", "Right"];
+  const HUES = [340, 20, 48, 150, 200, 260, 300];
+  const STEP_DELAY_MS = 450;
+ 
+  const $ = (id) => document.getElementById(id);
+  const boardEl = $("board");
+  const disksEl = $("disks");
+ 
+  let pegs, diskCount, moveCount, selected, busy, timer;
+ 
+  for (let n = 2; n <= 7; n++) {
+    disksEl.add(new Option(n, n, n === 3, n === 3));
+  }
+ 
+  function setMessage(text) { $("msg").textContent = text; }
+ 
+  function newGame() {
+    clearInterval(timer);
+    diskCount = +disksEl.value;
+    pegs = [Array.from({ length: diskCount }, (_, i) => diskCount - i), [], []];
+    moveCount = 0;
+    selected = null;
+    busy = false;
+    $("moves").innerHTML = "";
+    $("best").textContent = 2 ** diskCount - 1;
+    $("solve").disabled = false;
+    setMessage("Tap a peg to pick up its top disk, then tap where to drop it.");
+    render();
+  }
+ 
+  function render() {
+    boardEl.innerHTML = "";
+    pegs.forEach((stack, p) => {
+      const peg = document.createElement("button");
+      peg.className = "peg" + (selected === p ? " selected" : "");
+      peg.setAttribute("aria-label", `${PEG_NAMES[p]} peg, ${stack.length} disks`);
+      peg.onclick = () => tap(p);
+ 
+      stack.forEach((size, i) => {
+        const disk = document.createElement("div");
+        const isTop = i === stack.length - 1;
+        disk.className = "disk" + (selected === p && isTop ? " lifted" : "");
+        disk.style.width = `${22 + size * (70 / diskCount)}%`;
+        disk.style.background = `hsl(${HUES[(size - 1) % HUES.length]}, 65%, 62%)`;
+        peg.appendChild(disk);
+      });
+      boardEl.appendChild(peg);
+    });
+    $("count").textContent = moveCount;
+  }
+ 
+  function moveDisk(from, to) {
+    const size = pegs[from].pop();
+    pegs[to].push(size);
+    moveCount++;
+    const item = document.createElement("li");
+    item.textContent = `Move disk ${size} from ${PEG_NAMES[from].toLowerCase()} to ${PEG_NAMES[to].toLowerCase()}`;
+    $("moves").appendChild(item);
+    item.scrollIntoView({ block: "nearest" });
+  }
+ 
+  function isSolved() { return pegs[2].length === diskCount; }
+ 
+  function tap(p) {
+    if (busy) return;
+ 
+    if (selected === null) {
+      if (!pegs[p].length) return setMessage("That peg is empty.");
+      selected = p;
+      setMessage("Now tap where the disk should go.");
+    } else if (selected === p) {
+      selected = null;
+      setMessage("Disk put back.");
+    } else {
+      const moving = pegs[selected].at(-1);
+      const below = pegs[p].at(-1);
+      if (below && below < moving) {
+        setMessage("A bigger disk can't go on a smaller one.");
+      } else {
+        moveDisk(selected, p);
+        const best = 2 ** diskCount - 1;
+        setMessage(!isSolved() ? "Nice. Keep going."
+          : moveCount === best ? `Solved in ${moveCount} moves. That's the minimum!`
+          : `Solved in ${moveCount} moves. The minimum is ${best}. Try again?`);
+      }
+      selected = null;
+    }
+    render();
+  }
+ 
+  // The solution is calculated by Prolog (server.pl). JavaScript only animates it.
+  async function solve() {
+    if (busy) return;
+    busy = true;
+    selected = null;
+    $("solve").disabled = true;
+    setMessage("Asking Prolog for the solution...");
+ 
+    try {
+      const res = await fetch(`/solve?n=${diskCount}`);
+      const { moves, count } = await res.json();
+ 
+      pegs = [Array.from({ length: diskCount }, (_, i) => diskCount - i), [], []];
+      moveCount = 0;
+      $("moves").innerHTML = "";
+      setMessage(`Prolog found a ${count}-move solution.`);
+      render();
+ 
+      let i = 0;
+      timer = setInterval(() => {
+        if (i < moves.length) {
+          moveDisk(moves[i].from, moves[i].to);
+          i++;
+          render();
+        } else {
+          clearInterval(timer);
+          busy = false;
+          $("solve").disabled = false;
+          setMessage(`Solved by Prolog in ${moveCount} moves.`);
+        }
+      }, STEP_DELAY_MS);
+    } catch {
+      busy = false;
+      $("solve").disabled = false;
+      setMessage("Can't reach Prolog. Run server.pl, then open http://localhost:8080 (not this file).");
+    }
+  }
+ 
+  $("reset").onclick = newGame;
+  $("solve").onclick = solve;
+  disksEl.onchange = newGame;
+  newGame();
+</script>
+</body>
+</html>
+ 
